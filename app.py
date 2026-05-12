@@ -1,5 +1,5 @@
 """
-台股技術分析看板 — 多時間週期 + Cypher XABCD 自動偵測
+台股技術分析看板 — 多時間週期 + Cypher XABCD 自動偵測 + 台指期貨
 Run: streamlit run app.py
 """
 import streamlit as st
@@ -10,11 +10,8 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import os
 
-from stock_data import TW_STOCKS, INTERVALS, fetch_stock_data, get_latest_quote
-from analysis import (
-    add_all_indicators, detect_cypher,
-    calc_target_price, market_position,
-)
+from data import TW_STOCKS, INTERVALS, fetch_stock_data, get_latest_quote
+from analysis import add_all_indicators, detect_cypher, calc_target_price, market_position
 
 st.set_page_config(page_title="台股技術分析看板", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
@@ -26,15 +23,14 @@ st.markdown("""
     border-left:4px solid #636EFA; padding-left:10px; margin:14px 0 8px;
   }
   .badge {
-    display:inline-block; padding:5px 16px; border-radius:14px;
-    font-size:1.05rem; font-weight:700; letter-spacing:.5px;
+    display:inline-block; padding:5px 18px; border-radius:14px;
+    font-size:1.05rem; font-weight:700;
   }
-  .fib-row { font-family:monospace; font-size:.85rem; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ 設定")
 
@@ -46,23 +42,10 @@ with st.sidebar:
 
     st.markdown("**⏱ 時間週期**")
     interval_key = st.radio(
-        "時間週期",
-        list(INTERVALS.keys()),
-        index=5,            # 預設「日」
-        horizontal=True,
-        label_visibility="collapsed",
+        "週期", list(INTERVALS.keys()), index=5,
+        horizontal=True, label_visibility="collapsed",
     )
-    yf_interval, yf_period, _, iv_label = INTERVALS[interval_key]
-
-    if interval_key in ("日", "週"):
-        _period_options = ["1年", "2年", "3年", "5年"]
-        _period_default = {"日": 1, "週": 3}[interval_key]
-        period_label = st.selectbox("📅 資料期間", _period_options,
-                                    index=_period_default)
-        _period_map = {"1年": "1y", "2年": "2y", "3年": "3y", "5年": "5y"}
-        custom_period = _period_map[period_label]
-    else:
-        custom_period = None
+    _, _, _, iv_label = INTERVALS[interval_key]
 
     st.divider()
     st.markdown("**圖表設定**")
@@ -72,7 +55,7 @@ with st.sidebar:
     show_vol    = st.checkbox("成交量",      value=True)
 
     if show_cypher:
-        st.markdown("**Cypher 偵測靈敏度**")
+        st.markdown("**Cypher 靈敏度**")
         pivot_lr = st.slider("樞紐左右K數", 2, 8, 3)
         fib_tol  = st.slider("Fibonacci 容差 ±%", 1, 10, 5) / 100
 
@@ -85,22 +68,21 @@ with st.sidebar:
     st.caption(f"更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
 
-# ── Load Data ─────────────────────────────────────────────────────────────────
+# ── Data ──────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load(ticker, interval_key, custom_period=None):
-    df = fetch_stock_data(ticker, interval_key, custom_period)
+def load(ticker, interval_key):
+    df = fetch_stock_data(ticker, interval_key)
     if df is not None and not df.empty:
         return add_all_indicators(df)
     return None
 
 
 name = TW_STOCKS.get(ticker, ticker)
-period_hint = f"  ({period_label})" if custom_period else ""
-st.title(f"📈 {name}　{iv_label}{period_hint}")
-st.caption("Cypher 諧波形態自動偵測 ‧ 多空位階 ‧ 每日目標價")
+st.title(f"📈 {name}　{iv_label}")
+st.caption("Cypher 諧波形態 XABCD 自動偵測 ‧ 多空位階 ‧ 每日目標價")
 
 with st.spinner("載入資料中…"):
-    df = load(ticker, interval_key, custom_period)
+    df = load(ticker, interval_key)
 
 if df is None or df.empty:
     st.error("⚠️ 無法取得資料。分鐘資料僅支援近 7 天，請切換其他週期。")
@@ -109,12 +91,13 @@ if df is None or df.empty:
 quote  = get_latest_quote(ticker)
 target = calc_target_price(df)
 pos    = market_position(df)
+cypher_patterns = detect_cypher(df, pivot_lr, pivot_lr, fib_tol) if show_cypher else []
 
 
 # ── KPI Bar ───────────────────────────────────────────────────────────────────
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-cl = quote.get("close", float(df["Close"].iloc[-1]))
-chg= quote.get("change", 0); pct = quote.get("change_pct", 0)
+cl  = quote.get("close", float(df["Close"].iloc[-1]))
+chg = quote.get("change", 0); pct = quote.get("change_pct", 0)
 sign = "+" if chg >= 0 else ""
 
 with c1: st.metric("收盤 / 最新", f"{cl:,.2f}",
@@ -151,13 +134,13 @@ with col_r:
         t1,t2,t3 = st.columns(3)
         with t1:
             st.metric("🎯 目標",   f"{target['target_price']:,.2f}")
-            st.metric("樞紐 PP", f"{target['pivot_point']:,.2f}")
+            st.metric("樞紐 PP",   f"{target['pivot_point']:,.2f}")
         with t2:
-            st.metric("壓力 R1", f"{target['resistance1']:,.2f}")
-            st.metric("壓力 R2", f"{target['resistance2']:,.2f}")
+            st.metric("壓力 R1",   f"{target['resistance1']:,.2f}")
+            st.metric("壓力 R2",   f"{target['resistance2']:,.2f}")
         with t3:
-            st.metric("支撐 S1", f"{target['support1']:,.2f}")
-            st.metric("支撐 S2", f"{target['support2']:,.2f}")
+            st.metric("支撐 S1",   f"{target['support1']:,.2f}")
+            st.metric("支撐 S2",   f"{target['support2']:,.2f}")
         st.warning(f"止損參考：{target['stop_loss']:,.2f}")
 
 st.divider()
@@ -167,12 +150,12 @@ st.divider()
 st.markdown('<div class="section-title">📊 K線技術圖</div>', unsafe_allow_html=True)
 
 rows = 4 if show_vol else 3
-rh   = ([0.50, 0.50, 0.25, 0.18] if show_vol else [0.50, 0.50, 0.28])[:rows]
+rh   = ([0.50,0.50,0.25,0.18] if show_vol else [0.50,0.50,0.28])[:rows]
 
 fig = make_subplots(
     rows=rows, cols=1, shared_xaxes=True,
     vertical_spacing=0.025, row_heights=rh,
-    subplot_titles=(["K線 + 形態","","RSI(14)","MACD"] +
+    subplot_titles=(["K線 + Cypher XABCD","","RSI(14)","MACD"] +
                     (["成交量"] if show_vol else []))[:rows],
 )
 
@@ -186,25 +169,23 @@ fig.add_trace(go.Candlestick(
 
 # MA
 if show_ma:
-    for col_n, clr, w in [
-        ("MA5","#FFD700",1),("MA10","#FF8C00",1),
-        ("MA20","#00BFFF",1.5),("MA60","#FF69B4",1.5),("MA120","#9B59B6",2)
-    ]:
-        if col_n in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df[col_n], name=col_n,
-                line=dict(color=clr,width=w), opacity=0.9), row=1,col=1)
+    for cn,clr,w in [("MA5","#FFD700",1),("MA10","#FF8C00",1),
+                      ("MA20","#00BFFF",1.5),("MA60","#FF69B4",1.5),("MA120","#9B59B6",2)]:
+        if cn in df.columns:
+            fig.add_trace(go.Scatter(x=df.index,y=df[cn],name=cn,
+                line=dict(color=clr,width=w),opacity=0.9),row=1,col=1)
 
 # Bollinger
 if show_bb and "BB_upper" in df.columns:
     fig.add_trace(go.Scatter(x=df.index,y=df["BB_upper"],name="BB上",
-        line=dict(color="#556",dash="dot",width=1),opacity=0.7),row=1,col=1)
+        line=dict(color="#448",dash="dot",width=1),opacity=0.7),row=1,col=1)
     fig.add_trace(go.Scatter(x=df.index,y=df["BB_lower"],name="BB下",
-        line=dict(color="#556",dash="dot",width=1),opacity=0.7,
-        fill="tonexty",fillcolor="rgba(128,128,160,0.07)"),row=1,col=1)
+        line=dict(color="#448",dash="dot",width=1),opacity=0.7,
+        fill="tonexty",fillcolor="rgba(100,100,180,0.06)"),row=1,col=1)
     fig.add_trace(go.Scatter(x=df.index,y=df["BB_mid"],name="BB中",
-        line=dict(color="#668",dash="dash",width=1),opacity=0.6),row=1,col=1)
+        line=dict(color="#558",dash="dash",width=1),opacity=0.55),row=1,col=1)
 
-# Pivot lines
+# Pivot Lines
 if target:
     x0,x1 = df.index[max(-20,-len(df))], df.index[-1]
     for val,lbl,clr,dash in [
@@ -219,45 +200,40 @@ if target:
                            font=dict(color=clr,size=9.5),
                            xanchor="left",yanchor="middle",row=1,col=1)
 
-# ── Cypher Pattern ────────────────────────────────────────────────────────────
-cypher_patterns = []
-if show_cypher:
-    cypher_patterns = detect_cypher(df, pivot_left=pivot_lr,
-                                        pivot_right=pivot_lr,
-                                        tol=fib_tol)
-    POINT_LABELS = ["X", "A", "B", "C", "D"]
-    for pat in cypher_patterns:
-        pts = [pat.X, pat.A, pat.B, pat.C, pat.D]
-        xs  = [p[0] for p in pts]
-        ys  = [p[1] for p in pts]
-        clr = "#00FF88" if pat.direction == "bullish" else "#FF4466"
-        dash_style = "solid"
+# ── Cypher XABCD ──────────────────────────────────────────────────────────────
+PLBLS = ["X","A","B","C","D"]
+for pat in cypher_patterns:
+    pts = [pat.X, pat.A, pat.B, pat.C, pat.D]
+    xs  = [p[0] for p in pts]
+    ys  = [p[1] for p in pts]
+    clr = "#00FF88" if pat.direction == "bullish" else "#FF4466"
 
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys,
-            mode="lines+markers+text",
-            name=f"Cypher {'多' if pat.direction=='bullish' else '空'} Q{pat.quality:.0f}",
-            line=dict(color=clr, width=2, dash=dash_style),
-            marker=dict(size=10, symbol="circle",
-                        color=clr, line=dict(color="#fff",width=1.5)),
-            text=[f"<b>{l}</b><br>{p[1]:,.1f}" for l,p in zip(POINT_LABELS, pts)],
-            textposition=["bottom center","top center","bottom center",
-                          "top center","bottom center"]
-                       if pat.direction=="bullish" else
-                         ["top center","bottom center","top center",
-                          "bottom center","top center"],
-            textfont=dict(size=9, color=clr),
-            hovertemplate="<b>%{text}</b><extra></extra>",
-        ), row=1, col=1)
+    # XABCD line
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys,
+        mode="lines+markers+text",
+        name=f"Cypher {'多' if pat.direction=='bullish' else '空'} Q{pat.quality:.0f}",
+        line=dict(color=clr, width=2, dash="dash"),
+        marker=dict(size=11, color=clr, symbol="circle",
+                    line=dict(color="#fff", width=1.5)),
+        text=[f"<b>{lb}</b><br>{p[1]:,.1f}" for lb,p in zip(PLBLS, pts)],
+        textposition=[
+            "bottom center","top center","bottom center","top center","bottom center"
+        ] if pat.direction=="bullish" else [
+            "top center","bottom center","top center","bottom center","top center"
+        ],
+        textfont=dict(size=9, color=clr),
+    ), row=1, col=1)
 
-        fig.add_hrect(
-            y0=pat.D_zone_low, y1=pat.D_zone_high,
-            fillcolor=clr, opacity=0.10, line_width=0,
-            row=1, col=1,
-            annotation_text=f"PRZ {pat.PRZ:,.1f}",
-            annotation_font=dict(color=clr, size=9),
-            annotation_position="right",
-        )
+    # PRZ zone
+    fig.add_hrect(
+        y0=pat.D_zone_low, y1=pat.D_zone_high,
+        fillcolor=clr, opacity=0.10, line_width=0,
+        row=1, col=1,
+        annotation_text=f"PRZ {pat.PRZ:,.1f}",
+        annotation_font=dict(color=clr, size=9),
+        annotation_position="right",
+    )
 
 # RSI
 if "RSI14" in df.columns:
@@ -265,11 +241,11 @@ if "RSI14" in df.columns:
         line=dict(color="#E67E22",width=1.4)),row=2,col=1)
     fig.add_hrect(y0=70,y1=100,fillcolor="rgba(255,68,68,0.07)",line_width=0,row=2,col=1)
     fig.add_hrect(y0=0, y1=30, fillcolor="rgba(0,200,81,0.07)", line_width=0,row=2,col=1)
-    for lv,clr in [(70,"#FF4444"),(50,"#666"),(30,"#00C851")]:
+    for lv,clr in [(70,"#FF4444"),(50,"#555"),(30,"#00C851")]:
         fig.add_hline(y=lv,line_dash="dot",line_color=clr,line_width=1,row=2,col=1)
     rsi_now = float(df["RSI14"].iloc[-1])
     fig.add_annotation(x=df.index[-1],y=rsi_now,
-        text=f"{rsi_now:.1f}",showarrow=False,
+        text=f" {rsi_now:.1f}",showarrow=False,
         font=dict(color="#E67E22",size=9),xanchor="left",row=2,col=1)
 
 # MACD
@@ -281,7 +257,7 @@ if "MACD" in df.columns:
     fig.add_trace(go.Bar(x=df.index,y=df["Hist"],name="Hist",
         marker_color=["#FF4444" if v>=0 else "#00C851"
                       for v in df["Hist"].fillna(0)],opacity=0.7),row=3,col=1)
-    fig.add_hline(y=0,line_color="#555",line_width=0.8,row=3,col=1)
+    fig.add_hline(y=0,line_color="#444",line_width=0.8,row=3,col=1)
 
 # Volume
 if show_vol:
@@ -298,94 +274,82 @@ fig.update_layout(
     margin=dict(l=10,r=75,t=45,b=10),
     paper_bgcolor="#0E1117", plot_bgcolor="#0E1117",
 )
-fig.update_xaxes(showgrid=True,gridcolor="rgba(255,255,255,0.06)")
-fig.update_yaxes(showgrid=True,gridcolor="rgba(255,255,255,0.06)")
-
+fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
+fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
 st.plotly_chart(fig, use_container_width=True)
 
 
-# ── Cypher Detail Table ───────────────────────────────────────────────────────
+# ── Cypher Detail ─────────────────────────────────────────────────────────────
 if show_cypher:
-    st.markdown('<div class="section-title">🔷 Cypher 諧波形態詳情</div>',
+    st.markdown('<div class="section-title">🔷 Cypher XABCD 形態詳情</div>',
                 unsafe_allow_html=True)
     if cypher_patterns:
         def fmt_pt(pt):
             ts = pt[0]
-            if hasattr(ts, "strftime"):
-                label = ts.strftime("%m/%d %H:%M") if " " in str(ts) else ts.strftime("%m/%d")
-            else:
-                label = str(ts)[:10]
-            return f"{pt[1]:,.2f}  ({label})"
+            fmt = "%m/%d %H:%M" if hasattr(ts,"hour") and interval_key not in ("日","週") else "%m/%d"
+            return f"{pt[1]:,.2f}　({ts.strftime(fmt) if hasattr(ts,'strftime') else str(ts)[:10]})"
 
-        rows_data = []
-        for p in cypher_patterns:
-            rows_data.append({
-                "方向":       "🟢 看多" if p.direction=="bullish" else "🔴 看空",
-                "X":          fmt_pt(p.X),
-                "A":          fmt_pt(p.A),
-                "B":          fmt_pt(p.B),
-                "C":          fmt_pt(p.C),
-                "PRZ (D)":    f"{p.PRZ:,.2f}",
-                "PRZ 區間":   f"{p.D_zone_low:,.2f} ~ {p.D_zone_high:,.2f}",
-                "B fib":      f"{p.B_ratio:.3f}  (0.382~0.618)",
-                "C fib":      f"{p.C_ratio:.3f}  (1.272~1.414)",
-                "D fib":      f"{p.D_ratio:.3f}  (≈0.782)",
-                "完成":       "✅ 完成" if p.completed else "⏳ 進行中",
-                "品質":       f"{p.quality:.1f}",
-            })
-        st.dataframe(pd.DataFrame(rows_data), use_container_width=True)
+        st.dataframe(pd.DataFrame([{
+            "方向":     "🟢 看多" if p.direction=="bullish" else "🔴 看空",
+            "X":        fmt_pt(p.X),
+            "A":        fmt_pt(p.A),
+            "B":        fmt_pt(p.B),
+            "C":        fmt_pt(p.C),
+            "PRZ (D目標)": f"{p.PRZ:,.2f}",
+            "PRZ 區間": f"{p.D_zone_low:,.2f} ～ {p.D_zone_high:,.2f}",
+            "B fib":    f"{p.B_ratio:.3f}  (0.382~0.618)",
+            "C fib":    f"{p.C_ratio:.3f}  (1.272~1.414)",
+            "D fib":    f"{p.D_ratio:.3f}  (≈ 0.782)",
+            "D完成":    "✅" if p.completed else "⏳",
+            "品質":     f"{p.quality:.1f} / 100",
+        } for p in cypher_patterns]), use_container_width=True)
 
-        st.markdown("**Fibonacci 比例對照**")
-        fc1, fc2, fc3 = st.columns(len(cypher_patterns))
-        cols_fc = [fc1, fc2, fc3][:len(cypher_patterns)]
-        for col_fc, pat in zip(cols_fc, cypher_patterns):
-            with col_fc:
-                dir_lbl = "🟢 看多" if pat.direction=="bullish" else "🔴 看空"
-                st.caption(f"{dir_lbl}  品質 {pat.quality:.0f}")
-                for lbl, actual, (lo,hi) in [
-                    ("B", pat.B_ratio, (0.382,0.618)),
-                    ("C", pat.C_ratio, (1.272,1.414)),
-                    ("D", pat.D_ratio, (0.732,0.832)),
+        # Fibonacci 比例燈號
+        st.markdown("**各點 Fibonacci 比例對照**")
+        fcols = st.columns(min(len(cypher_patterns), 4))
+        for col_f, pat in zip(fcols, cypher_patterns):
+            with col_f:
+                d_lbl = "🟢 看多" if pat.direction=="bullish" else "🔴 看空"
+                st.caption(f"{d_lbl}　品質 {pat.quality:.0f}/100")
+                for lbl, actual, lo, hi in [
+                    ("B", pat.B_ratio, 0.382, 0.618),
+                    ("C", pat.C_ratio, 1.272, 1.414),
+                    ("D", pat.D_ratio, 0.732, 0.832),
                 ]:
-                    in_range = lo <= actual <= hi
-                    icon = "✅" if in_range else "⚠️"
-                    st.write(f"{icon} **{lbl}**  `{actual:.3f}`  [{lo}~{hi}]")
+                    ok = lo <= actual <= hi
+                    st.write(f"{'✅' if ok else '⚠️'} **{lbl}** `{actual:.3f}` [{lo}~{hi}]")
     else:
         st.info(f"目前 {iv_label} 週期未偵測到 Cypher 形態。"
-                "可嘗試：調低左右K數、增大容差，或切換較長週期。")
+                "可嘗試：降低左右K數、增大容差，或換較長週期。")
 
-    with st.expander("📖 Cypher 形態說明", expanded=False):
+    with st.expander("📖 Cypher 形態說明"):
         st.markdown("""
-**Cypher 諧波形態** 是五波結構（X→A→B→C→D），利用 Fibonacci 比例定義：
-
-| 波段 | Fibonacci 範圍 | 說明 |
+| 點位 | Fibonacci 範圍 | 說明 |
 |------|--------------|------|
-| XA   | —            | 起始驅動波 |
-| AB   | 0.382–0.618 XA | B 回測 XA |
-| BC   | 1.272–1.414 XA（以 X 為基準） | C 延伸突破 A |
-| CD   | **0.782 XC** | D 為潛在反轉區 PRZ |
+| X→A | — | 起始驅動波 |
+| A→B | **0.382~0.618** XA | B 回測 XA |
+| X→C | **1.272~1.414** XA | C 延伸突破 A（以 X 為原點） |
+| X→D | **0.782** XC | D = PRZ 潛在反轉區 |
 
-**PRZ（Potential Reversal Zone）** 是進場或出場的關鍵區域：
-- 🟢 **看多 Cypher**：D 點跌入 PRZ → 做多，止損破 X
-- 🔴 **看空 Cypher**：D 點漲入 PRZ → 做空，止損破 X
+🟢 **看多**：D 跌入 PRZ → 做多，止損破 X  
+🔴 **看空**：D 漲入 PRZ → 做空，止損破 X
         """)
 
 
 # ── Raw Data ──────────────────────────────────────────────────────────────────
-with st.expander("📋 近期K線數據（含指標）", expanded=False):
+with st.expander("📋 近期K線數據（含指標）"):
     show_cols = ["Open","High","Low","Close","Volume",
                  "MA5","MA20","MA60","RSI14","MACD","Signal","ATR14"]
     avail = [c for c in show_cols if c in df.columns]
     disp  = df[avail].tail(50).sort_index(ascending=False).copy()
-    fmt   = {c: "{:,.2f}" for c in avail if c != "Volume"}
-    fmt["Volume"] = "{:,.0f}"
+    fmt   = {c:"{:,.2f}" for c in avail if c!="Volume"}; fmt["Volume"]="{:,.0f}"
     ts_fmt = "%Y-%m-%d %H:%M" if interval_key not in ("日","週") else "%Y-%m-%d"
     disp.index = disp.index.strftime(ts_fmt)
     st.dataframe(disp.style.format(fmt), use_container_width=True)
 
 
 # ── Daily Log ─────────────────────────────────────────────────────────────────
-LOG = f".cache/log_{ticker.replace('^','').replace('.','_')}_{interval_key}.csv"
+LOG = f".cache/log_{ticker.replace('^','').replace('=','_').replace('.','_')}_{interval_key}.csv"
 
 def load_log():
     if os.path.exists(LOG):
@@ -395,13 +359,12 @@ def load_log():
 def save_log(q, t):
     log   = load_log()
     today = pd.Timestamp(q.get("date", datetime.now().date()))
-    if not log.empty and (log["date"] == today).any():
-        return log
+    if not log.empty and (log["date"]==today).any(): return log
     return pd.concat([log, pd.DataFrame([{
         "date": today, "close": q.get("close",0),
         "target": t.get("target_price",0), "support": t.get("support1",0),
         "resistance": t.get("resistance1",0), "bias": t.get("bias",""), "result":"",
-    }])], ignore_index=True).pipe(lambda df: (df.to_csv(LOG,index=False), df)[1])
+    }])], ignore_index=True).pipe(lambda d: (d.to_csv(LOG,index=False), d)[1])
 
 log = save_log(quote, target) if target and quote else load_log()
 
@@ -416,14 +379,14 @@ with st.expander("📅 每日目標價追蹤紀錄", expanded=True):
         if len(log) >= 3:
             ls = log.sort_values("date")
             fl = go.Figure()
-            fl.add_trace(go.Scatter(x=ls["date"],y=ls["close"],     name="實際收盤",
-                line=dict(color="#00BFFF",width=2)))
-            fl.add_trace(go.Scatter(x=ls["date"],y=ls["target"],    name="目標價",
-                line=dict(color="#FFD700",width=2,dash="dash")))
-            fl.add_trace(go.Scatter(x=ls["date"],y=ls["resistance"],name="壓力R1",
-                line=dict(color="#FF6666",width=1,dash="dot")))
-            fl.add_trace(go.Scatter(x=ls["date"],y=ls["support"],   name="支撐S1",
-                line=dict(color="#66CC66",width=1,dash="dot")))
+            for y,nm,clr,dash in [
+                (ls["close"],      "實際收盤","#00BFFF","solid"),
+                (ls["target"],     "目標價",  "#FFD700","dash"),
+                (ls["resistance"], "壓力R1",  "#FF6666","dot"),
+                (ls["support"],    "支撐S1",  "#66CC66","dot"),
+            ]:
+                fl.add_trace(go.Scatter(x=ls["date"],y=y,name=nm,
+                    line=dict(color=clr,width=2 if dash=="solid" else 1,dash=dash)))
             fl.update_layout(height=240,template="plotly_dark",
                 title="收盤 vs 目標價追蹤",margin=dict(l=10,r=10,t=36,b=10),
                 paper_bgcolor="#0E1117",plot_bgcolor="#0E1117",
@@ -433,5 +396,5 @@ with st.expander("📅 每日目標價追蹤紀錄", expanded=True):
         st.info("尚無紀錄，開啟後自動記錄當日資料。")
 
 st.divider()
-st.caption("⚠️ 本看板僅供學習研究，非投資建議。Cypher 為技術分析工具，不保證準確性。"
-           f"  資料來源：Yahoo Finance  ｜  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption("⚠️ 本看板僅供學習研究，非投資建議。資料來源：Yahoo Finance  "
+           f"｜  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
