@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import os
 
-from data import TW_STOCKS, INTERVALS, fetch_stock_data, get_latest_quote
+from stock_data import TW_STOCKS, INTERVALS, fetch_stock_data, get_latest_quote
 from analysis import (
     add_all_indicators, detect_cypher,
     calc_target_price, market_position,
