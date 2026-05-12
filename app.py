@@ -371,7 +371,7 @@ log = save_log(quote, target) if target and quote else load_log()
 with st.expander("📅 每日目標價追蹤紀錄", expanded=True):
     if not log.empty:
         disp = log.sort_values("date",ascending=False).head(30).copy()
-        disp["date"] = disp["date"].dt.strftime("%Y-%m-%d")
+        disp["date"] = pd.to_datetime(disp["date"]).dt.strftime("%Y-%m-%d")
         disp.columns = ["日期","收盤","目標價","支撐S1","壓力R1","偏向","結果"]
         st.dataframe(disp.style.format(
             {"收盤":"{:,.2f}","目標價":"{:,.2f}","支撐S1":"{:,.2f}","壓力R1":"{:,.2f}"}),
